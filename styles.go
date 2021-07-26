@@ -870,7 +870,7 @@ func formatToFloat(v string, format string) string {
 	if err != nil {
 		return v
 	}
-	return fmt.Sprintf("%.2f", f)
+	return fmt.Sprintf("%f", f)
 }
 
 // formatToA provides a function to convert original string to special format
@@ -896,9 +896,9 @@ func formatToB(v string, format string) string {
 		return v
 	}
 	if f < 0 {
-		return fmt.Sprintf("(%.2f)", f)
+		return fmt.Sprintf("(%f)", f)
 	}
-	return fmt.Sprintf("%.2f", f)
+	return fmt.Sprintf("%f", f)
 }
 
 // formatToC provides a function to convert original string to special format
@@ -909,7 +909,7 @@ func formatToC(v string, format string) string {
 		return v
 	}
 	f = f * 100
-	return fmt.Sprintf("%.f%%", f)
+	return fmt.Sprintf("%f%%", f)
 }
 
 // formatToD provides a function to convert original string to special format
@@ -920,7 +920,7 @@ func formatToD(v string, format string) string {
 		return v
 	}
 	f = f * 100
-	return fmt.Sprintf("%.2f%%", f)
+	return fmt.Sprintf("%f%%", f)
 }
 
 // formatToE provides a function to convert original string to special format

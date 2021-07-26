@@ -378,11 +378,8 @@ func (c *xlsxC) getValueFrom(f *File, d *xlsxSST) (string, error) {
 		return f.formattedValue(c.S, c.V), nil
 	default:
 		isNum, precision := isNumeric(c.V)
-		if isNum && precision > 10 {
-			val, _ := roundPrecision(c.V)
-			if val != c.V {
-				return f.formattedValue(c.S, val), nil
-			}
+		if isNum && precision > 0 {
+			return c.V, nil
 		}
 		return f.formattedValue(c.S, c.V), nil
 	}
