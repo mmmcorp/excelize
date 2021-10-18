@@ -1350,3 +1350,25 @@ func BenchmarkOpenFile(b *testing.B) {
 		}
 	}
 }
+
+func Test_mmm(t *testing.T) {
+	// f, _ := OpenFile("valid_impairment_test.xlsx")
+	f, _ := OpenFile("test/ALL_MATCH_valid_impairment_test.xlsx")
+
+	rows, _ := f.GetRows(getLeftVisibleSheetName(f), Options{})
+
+	for _, v := range rows {
+		fmt.Println(v)
+	}
+}
+
+func getLeftVisibleSheetName(f *File) string {
+	sheetNum := len(f.GetSheetMap())
+	for i := 0; i < sheetNum; i++ {
+		name := f.GetSheetName(i)
+		if f.GetSheetVisible(name) {
+			return name
+		}
+	}
+	return ""
+}
