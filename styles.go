@@ -930,7 +930,7 @@ func formatToE(v string, format string) string {
 	if err != nil {
 		return v
 	}
-	return fmt.Sprintf("%.e", f)
+	return fmt.Sprintf("%.2E", f)
 }
 
 // parseTime provides a function to returns a string parsed using time.Time.
@@ -996,6 +996,7 @@ func parseTime(v string, format string) string {
 		{"mm", "01"},
 		{"am/pm", "pm"},
 		{"m/", "1/"},
+		{"m", "1"},
 		{"%%%%", "January"},
 		{"&&&&", "Monday"},
 	}
@@ -1005,6 +1006,7 @@ func parseTime(v string, format string) string {
 		{"\\ ", " "},
 		{"\\.", "."},
 		{"\\", ""},
+		{"\"", ""},
 	}
 	// It is the presence of the "am/pm" indicator that determines if this is
 	// a 12 hour or 24 hours time format, not the number of 'h' characters.
@@ -1112,6 +1114,9 @@ func parseFormatStyleSet(style interface{}) (*Style, error) {
 		if fs.Font.Size > MaxFontSize {
 			return &fs, ErrFontSize
 		}
+	}
+	if fs.CustomNumFmt != nil && len(*fs.CustomNumFmt) == 0 {
+		err = ErrCustomNumFmt
 	}
 	return &fs, err
 }
@@ -2601,7 +2606,8 @@ func (f *File) GetCellStyle(sheet, axis string) (int, error) {
 // SetCellStyle provides a function to add style attribute for cells by given
 // worksheet name, coordinate area and style ID. Note that diagonalDown and
 // diagonalUp type border should be use same color in the same coordinate
-// area.
+// area. SetCellStyle will overwrite the existing styles for the cell, it
+// won't append or merge style with existing styles.
 //
 // For example create a borders of cell H9 on Sheet1:
 //
@@ -3008,6 +3014,7 @@ func drawCondFmtCellIs(p int, ct string, format *formatConditional) *xlsxCfRule 
 func drawCondFmtTop10(p int, ct string, format *formatConditional) *xlsxCfRule {
 	c := &xlsxCfRule{
 		Priority: p + 1,
+		Bottom:   format.Type == "bottom",
 		Type:     validType[format.Type],
 		Rank:     10,
 		DxfID:    &format.Format,

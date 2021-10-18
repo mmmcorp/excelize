@@ -17,11 +17,16 @@ import (
 )
 
 const (
+	nanosInADay    = float64((24 * time.Hour) / time.Nanosecond)
 	dayNanoseconds = 24 * time.Hour
 	maxDuration    = 290 * 364 * dayNanoseconds
+	roundEpsilon   = 1e-9
 )
 
 var (
+	daysInMonth           = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+	excel1900Epoc         = time.Date(1899, time.December, 30, 0, 0, 0, 0, time.UTC)
+	excel1904Epoc         = time.Date(1904, time.January, 1, 0, 0, 0, 0, time.UTC)
 	excelMinTime1900      = time.Date(1899, time.December, 31, 0, 0, 0, 0, time.UTC)
 	excelBuggyPeriodStart = time.Date(1900, time.March, 1, 0, 0, 0, 0, time.UTC).Add(-time.Nanosecond)
 )
@@ -131,12 +136,11 @@ func doTheFliegelAndVanFlandernAlgorithm(jd int) (day, month, year int) {
 // timeFromExcelTime provides a function to convert an excelTime
 // representation (stored as a floating point number) to a time.Time.
 func timeFromExcelTime(excelTime float64, date1904 bool) time.Time {
-	const MDD int64 = 106750 // Max time.Duration Days, aprox. 290 years
 	var date time.Time
-	var intPart = int64(excelTime)
+	var wholeDaysPart = int(excelTime)
 	// Excel uses Julian dates prior to March 1st 1900, and Gregorian
 	// thereafter.
-	if intPart <= 61 {
+	if wholeDaysPart <= 61 {
 		const OFFSET1900 = 15018.0
 		const OFFSET1904 = 16480.0
 		const MJD0 float64 = 2400000.5
@@ -148,23 +152,14 @@ func timeFromExcelTime(excelTime float64, date1904 bool) time.Time {
 		}
 		return date
 	}
-	var floatPart = excelTime - float64(intPart)
-	var dayNanoSeconds float64 = 24 * 60 * 60 * 1000 * 1000 * 1000
+	var floatPart = excelTime - float64(wholeDaysPart) + roundEpsilon
 	if date1904 {
-		date = time.Date(1904, 1, 1, 0, 0, 0, 0, time.UTC)
+		date = excel1904Epoc
 	} else {
-		date = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
+		date = excel1900Epoc
 	}
-
-	// Duration is limited to aprox. 290 years
-	for intPart > MDD {
-		durationDays := time.Duration(MDD) * time.Hour * 24
-		date = date.Add(durationDays)
-		intPart = intPart - MDD
-	}
-	durationDays := time.Duration(intPart) * time.Hour * 24
-	durationPart := time.Duration(dayNanoSeconds * floatPart)
-	return date.Add(durationDays).Add(durationPart)
+	durationPart := time.Duration(nanosInADay * floatPart)
+	return date.AddDate(0, 0, wholeDaysPart).Add(durationPart).Truncate(time.Second)
 }
 
 // ExcelDateToTime converts a float-based excel date representation to a time.Time.
@@ -173,4 +168,48 @@ func ExcelDateToTime(excelDate float64, use1904Format bool) (time.Time, error) {
 		return time.Time{}, newInvalidExcelDateError(excelDate)
 	}
 	return timeFromExcelTime(excelDate, use1904Format), nil
+}
+
+// isLeapYear determine if leap year for a given year.
+func isLeapYear(y int) bool {
+	if y == y/400*400 {
+		return true
+	}
+	if y == y/100*100 {
+		return false
+	}
+	return y == y/4*4
+}
+
+// getDaysInMonth provides a function to get the days by a given year and
+// month number.
+func getDaysInMonth(y, m int) int {
+	if m == 2 && isLeapYear(y) {
+		return 29
+	}
+	return daysInMonth[m-1]
+}
+
+// validateDate provides a function to validate if a valid date by a given
+// year, month, and day number.
+func validateDate(y, m, d int) bool {
+	if m < 1 || m > 12 {
+		return false
+	}
+	if d < 1 {
+		return false
+	}
+	return d <= getDaysInMonth(y, m)
+}
+
+// formatYear converts the given year number into a 4-digit format.
+func formatYear(y int) int {
+	if y < 1900 {
+		if y < 30 {
+			y += 2000
+		} else {
+			y += 1900
+		}
+	}
+	return y
 }

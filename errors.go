@@ -16,24 +16,39 @@ import (
 	"fmt"
 )
 
+// newInvalidColumnNameError defined the error message on receiving the invalid column name.
 func newInvalidColumnNameError(col string) error {
 	return fmt.Errorf("invalid column name %q", col)
 }
 
+// newInvalidRowNumberError defined the error message on receiving the invalid row number.
 func newInvalidRowNumberError(row int) error {
 	return fmt.Errorf("invalid row number %d", row)
 }
 
+// newInvalidCellNameError defined the error message on receiving the invalid cell name.
 func newInvalidCellNameError(cell string) error {
 	return fmt.Errorf("invalid cell name %q", cell)
 }
 
+// newInvalidExcelDateError defined the error message on receiving the data with negative values.
 func newInvalidExcelDateError(dateValue float64) error {
-	return fmt.Errorf("invalid date value %f, negative values are not supported supported", dateValue)
+	return fmt.Errorf("invalid date value %f, negative values are not supported", dateValue)
 }
 
+// newUnsupportChartType defined the error message on receiving the chart type are unsupported.
 func newUnsupportChartType(chartType string) error {
 	return fmt.Errorf("unsupported chart type %s", chartType)
+}
+
+// newUnzipSizeLimitError defined the error message on unzip size exceeds the limit.
+func newUnzipSizeLimitError(unzipSizeLimit int64) error {
+	return fmt.Errorf("unzip size exceeds the %d bytes limit", unzipSizeLimit)
+}
+
+// newInvalidStyleID defined the error message on receiving the invalid style ID.
+func newInvalidStyleID(styleID int) error {
+	return fmt.Errorf("invalid style ID %d, negative values are not supported", styleID)
 }
 
 var (
@@ -45,7 +60,7 @@ var (
 	ErrColumnNumber = errors.New("column number exceeds maximum limit")
 	// ErrColumnWidth defined the error message on receive an invalid column
 	// width.
-	ErrColumnWidth = errors.New("the width of the column must be smaller than or equal to 255 characters")
+	ErrColumnWidth = fmt.Errorf("the width of the column must be smaller than or equal to %d characters", MaxColumnWidth)
 	// ErrOutlineLevel defined the error message on receive an invalid outline
 	// level number.
 	ErrOutlineLevel = errors.New("invalid outline level")
@@ -64,8 +79,8 @@ var (
 	// ErrAddVBAProject defined the error message on add the VBA project in
 	// the workbook.
 	ErrAddVBAProject = errors.New("unsupported VBA project extension")
-	// ErrToExcelTime defined the error message on receive a not UTC time.
-	ErrToExcelTime = errors.New("only UTC time expected")
+	// ErrMaxRows defined the error message on receive a row number exceeds maximum limit.
+	ErrMaxRows = errors.New("row number exceeds maximum limit")
 	// ErrMaxRowHeight defined the error message on receive an invalid row
 	// height.
 	ErrMaxRowHeight = errors.New("the height of the row must be smaller than or equal to 409 points")
@@ -95,6 +110,8 @@ var (
 	// ErrDefinedNameduplicate defined the error message on the same name
 	// already exists on the scope.
 	ErrDefinedNameduplicate = errors.New("the same name already exists on the scope")
+	// ErrCustomNumFmt defined the error message on receive the empty custom number format.
+	ErrCustomNumFmt = errors.New("custom number format can not be empty")
 	// ErrFontLength defined the error message on the length of the font
 	// family name overflow.
 	ErrFontLength = errors.New("the length of the font family name must be smaller than or equal to 31")
@@ -105,4 +122,16 @@ var (
 	ErrSheetIdx = errors.New("invalid worksheet index")
 	// ErrGroupSheets defined the error message on group sheets.
 	ErrGroupSheets = errors.New("group worksheet must contain an active worksheet")
+	// ErrDataValidationFormulaLenth defined the error message for receiving a
+	// data validation formula length that exceeds the limit.
+	ErrDataValidationFormulaLenth = errors.New("data validation must be 0-255 characters")
+	// ErrDataValidationRange defined the error message on set decimal range
+	// exceeds limit.
+	ErrDataValidationRange = errors.New("data validation range exceeds limit")
+	// ErrCellCharsLength defined the error message for receiving a cell
+	// characters length that exceeds the limit.
+	ErrCellCharsLength = fmt.Errorf("cell value must be 0-%d characters", TotalCellChars)
+	// ErrOptionsUnzipSizeLimit defined the error message for receiving
+	// invalid UnzipSizeLimit and WorksheetUnzipMemLimit.
+	ErrOptionsUnzipSizeLimit = errors.New("the value of UnzipSizeLimit should be greater than or equal to WorksheetUnzipMemLimit")
 )

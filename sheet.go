@@ -72,12 +72,13 @@ func (f *File) contentTypesReader() *xlsxTypes {
 
 	if f.ContentTypes == nil {
 		f.ContentTypes = new(xlsxTypes)
+		f.ContentTypes.Lock()
+		defer f.ContentTypes.Unlock()
 		if err = f.xmlNewDecoder(bytes.NewReader(namespaceStrictToTransitional(f.readXML("[Content_Types].xml")))).
 			Decode(f.ContentTypes); err != nil && err != io.EOF {
 			log.Printf("xml decode error: %s", err)
 		}
 	}
-
 	return f.ContentTypes
 }
 
@@ -157,6 +158,9 @@ func (f *File) workSheetWriter() {
 	f.Sheet.Range(func(p, ws interface{}) bool {
 		if ws != nil {
 			sheet := ws.(*xlsxWorksheet)
+			if sheet.MergeCells != nil && len(sheet.MergeCells.Cells) > 0 {
+				_ = f.mergeOverlapCells(sheet)
+			}
 			for k, v := range sheet.SheetData.Row {
 				sheet.SheetData.Row[k].C = trimCell(v.C)
 			}
@@ -415,6 +419,9 @@ func (f *File) GetSheetIndex(name string) int {
 //    for index, name := range f.GetSheetMap() {
 //        fmt.Println(index, name)
 //    }
+//    if err = f.Close(); err != nil {
+//        fmt.Println(err)
+//    }
 //
 func (f *File) GetSheetMap() map[int]string {
 	wb := f.workbookReader()
@@ -458,6 +465,9 @@ func (f *File) getSheetMap() map[string]string {
 				if _, ok := f.Pkg.Load(path); ok {
 					maps[v.Name] = path
 				}
+				if _, ok := f.tempFiles.Load(path); ok {
+					maps[v.Name] = path
+				}
 			}
 		}
 	}
@@ -476,7 +486,7 @@ func (f *File) SetSheetBackground(sheet, picture string) error {
 	if !ok {
 		return ErrImgExt
 	}
-	file, _ := ioutil.ReadFile(picture)
+	file, _ := ioutil.ReadFile(filepath.Clean(picture))
 	name := f.addMedia(file, ext)
 	sheetRels := "xl/worksheets/_rels/" + strings.TrimPrefix(f.sheetMap[trimSheetName(sheet)], "xl/worksheets/") + ".rels"
 	rID := f.addRels(sheetRels, SourceRelationshipImage, strings.Replace(name, "xl", "..", 1), "")
@@ -651,13 +661,13 @@ func (f *File) SetSheetVisible(name string, visible bool) error {
 		}
 	}
 	for k, v := range content.Sheets.Sheet {
-		xlsx, err := f.workSheetReader(v.Name)
+		ws, err := f.workSheetReader(v.Name)
 		if err != nil {
 			return err
 		}
 		tabSelected := false
-		if len(xlsx.SheetViews.SheetView) > 0 {
-			tabSelected = xlsx.SheetViews.SheetView[0].TabSelected
+		if len(ws.SheetViews.SheetView) > 0 {
+			tabSelected = ws.SheetViews.SheetView[0].TabSelected
 		}
 		if v.Name == name && count > 1 && !tabSelected {
 			content.Sheets.Sheet[k].State = "hidden"
@@ -854,7 +864,7 @@ func (f *File) searchSheet(name, value string, regSearch bool) (result []string,
 	)
 
 	d = f.sharedStringsReader()
-	decoder := f.xmlNewDecoder(bytes.NewReader(f.readXML(name)))
+	decoder := f.xmlNewDecoder(bytes.NewReader(f.readBytes(name)))
 	for {
 		var token xml.Token
 		token, err = decoder.Token()
@@ -876,7 +886,7 @@ func (f *File) searchSheet(name, value string, regSearch bool) (result []string,
 			if inElement == "c" {
 				colCell := xlsxC{}
 				_ = decoder.DecodeElement(&colCell, &xmlElement)
-				val, _ := colCell.getValueFrom(f, d)
+				val, _ := colCell.getValueFrom(f, d, false)
 				if regSearch {
 					regex := regexp.MustCompile(value)
 					if !regex.MatchString(val) {

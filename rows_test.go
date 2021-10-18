@@ -32,6 +32,7 @@ func TestRows(t *testing.T) {
 	if !assert.NoError(t, rows.Error()) {
 		t.FailNow()
 	}
+	assert.NoError(t, rows.Close())
 
 	returnedRows, err := f.GetRows(sheet2)
 	assert.NoError(t, err)
@@ -41,6 +42,7 @@ func TestRows(t *testing.T) {
 	if !assert.Equal(t, collectedRows, returnedRows) {
 		t.FailNow()
 	}
+	assert.NoError(t, f.Close())
 
 	f = NewFile()
 	f.Pkg.Store("xl/worksheets/sheet1.xml", []byte(`<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>1</v></c></row><row r="A"><c r="2" t="str"><v>B</v></c></row></sheetData></worksheet>`))
@@ -52,6 +54,14 @@ func TestRows(t *testing.T) {
 	f.Pkg.Store("xl/worksheets/sheet1.xml", nil)
 	_, err = f.Rows("Sheet1")
 	assert.NoError(t, err)
+
+	// Test reload the file to memory from system temporary directory.
+	f, err = OpenFile(filepath.Join("test", "Book1.xlsx"), Options{WorksheetUnzipMemLimit: 1024})
+	assert.NoError(t, err)
+	value, err := f.GetCellValue("Sheet1", "A19")
+	assert.NoError(t, err)
+	assert.Equal(t, "Total:", value)
+	assert.NoError(t, f.Close())
 }
 
 func TestRowsIterator(t *testing.T) {
@@ -70,6 +80,8 @@ func TestRowsIterator(t *testing.T) {
 		require.True(t, rowCount <= expectedNumRow, "rowCount is greater than expected")
 	}
 	assert.Equal(t, expectedNumRow, rowCount)
+	assert.NoError(t, rows.Close())
+	assert.NoError(t, f.Close())
 
 	// Valued cell sparse distribution test
 	f = NewFile()
@@ -94,6 +106,7 @@ func TestRowsError(t *testing.T) {
 	}
 	_, err = f.Rows("SheetN")
 	assert.EqualError(t, err, "sheet SheetN is not exist")
+	assert.NoError(t, f.Close())
 }
 
 func TestRowHeight(t *testing.T) {
@@ -232,7 +245,7 @@ func TestRemoveRow(t *testing.T) {
 	)
 	fillCells(f, sheet1, colCount, rowCount)
 
-	assert.NoError(t, f.SetCellHyperLink(sheet1, "A5", "https://github.com/360EntSecGroup-Skylar/excelize", "External"))
+	assert.NoError(t, f.SetCellHyperLink(sheet1, "A5", "https://github.com/xuri/excelize", "External"))
 
 	assert.EqualError(t, f.RemoveRow(sheet1, -1), "invalid row number -1")
 
@@ -293,7 +306,7 @@ func TestInsertRow(t *testing.T) {
 	)
 	fillCells(f, sheet1, colCount, rowCount)
 
-	assert.NoError(t, f.SetCellHyperLink(sheet1, "A5", "https://github.com/360EntSecGroup-Skylar/excelize", "External"))
+	assert.NoError(t, f.SetCellHyperLink(sheet1, "A5", "https://github.com/xuri/excelize", "External"))
 
 	assert.EqualError(t, f.InsertRow(sheet1, -1), "invalid row number -1")
 
@@ -845,7 +858,7 @@ func TestGetValueFromInlineStr(t *testing.T) {
 	c := &xlsxC{T: "inlineStr"}
 	f := NewFile()
 	d := &xlsxSST{}
-	val, err := c.getValueFrom(f, d)
+	val, err := c.getValueFrom(f, d, false)
 	assert.NoError(t, err)
 	assert.Equal(t, "", val)
 }
@@ -865,7 +878,7 @@ func TestGetValueFromNumber(t *testing.T) {
 		"2.220000ddsf0000000002-r": "2.220000ddsf0000000002-r",
 	} {
 		c.V = input
-		val, err := c.getValueFrom(f, d)
+		val, err := c.getValueFrom(f, d, false)
 		assert.NoError(t, err)
 		assert.Equal(t, expected, val)
 	}
@@ -889,6 +902,18 @@ func TestCheckRow(t *testing.T) {
 	assert.EqualError(t, f.SetCellValue("Sheet1", "A1", false), `cannot convert cell "-" to coordinates: invalid cell name "-"`)
 }
 
+func TestSetRowStyle(t *testing.T) {
+	f := NewFile()
+	styleID, err := f.NewStyle(`{"fill":{"type":"pattern","color":["#E0EBF5"],"pattern":1}}`)
+	assert.NoError(t, err)
+	assert.EqualError(t, f.SetRowStyle("Sheet1", 10, -1, styleID), newInvalidRowNumberError(-1).Error())
+	assert.EqualError(t, f.SetRowStyle("Sheet1", 1, TotalRows+1, styleID), ErrMaxRows.Error())
+	assert.EqualError(t, f.SetRowStyle("Sheet1", 1, 1, -1), newInvalidStyleID(-1).Error())
+	assert.EqualError(t, f.SetRowStyle("SheetN", 1, 1, styleID), "sheet SheetN is not exist")
+	assert.NoError(t, f.SetRowStyle("Sheet1", 10, 1, styleID))
+	assert.NoError(t, f.SaveAs(filepath.Join("test", "TestSetRowStyle.xlsx")))
+}
+
 func TestNumberFormats(t *testing.T) {
 	f, err := OpenFile(filepath.Join("test", "Book1.xlsx"))
 	if !assert.NoError(t, err) {
@@ -908,6 +933,7 @@ func TestNumberFormats(t *testing.T) {
 		cells = append(cells, col)
 	}
 	assert.Equal(t, []string{"", "200", "450", "200", "510", "315", "127", "89", "348", "53", "37"}, cells[3])
+	assert.NoError(t, f.Close())
 }
 
 func BenchmarkRows(b *testing.B) {
@@ -922,6 +948,12 @@ func BenchmarkRows(b *testing.B) {
 				}
 			}
 		}
+		if err := rows.Close(); err != nil {
+			b.Error(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		b.Error(err)
 	}
 }
 

@@ -1,13 +1,18 @@
 package excelize
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var validColumns = []struct {
@@ -211,9 +216,34 @@ func TestCoordinatesToCellName_Error(t *testing.T) {
 	}
 }
 
+func TestCoordinatesToAreaRef(t *testing.T) {
+	f := NewFile()
+	_, err := f.coordinatesToAreaRef([]int{})
+	assert.EqualError(t, err, ErrCoordinates.Error())
+	_, err = f.coordinatesToAreaRef([]int{1, -1, 1, 1})
+	assert.EqualError(t, err, "invalid cell coordinates [1, -1]")
+	_, err = f.coordinatesToAreaRef([]int{1, 1, 1, -1})
+	assert.EqualError(t, err, "invalid cell coordinates [1, -1]")
+	ref, err := f.coordinatesToAreaRef([]int{1, 1, 1, 1})
+	assert.NoError(t, err)
+	assert.EqualValues(t, ref, "A1:A1")
+}
+
+func TestSortCoordinates(t *testing.T) {
+	assert.EqualError(t, sortCoordinates(make([]int, 3)), ErrCoordinates.Error())
+}
+
+func TestInStrSlice(t *testing.T) {
+	assert.EqualValues(t, -1, inStrSlice([]string{}, ""))
+}
+
 func TestBytesReplace(t *testing.T) {
 	s := []byte{0x01}
 	assert.EqualValues(t, s, bytesReplace(s, []byte{}, []byte{}, 0))
+}
+
+func TestGetRootElement(t *testing.T) {
+	assert.Equal(t, 0, len(getRootElement(xml.NewDecoder(strings.NewReader("")))))
 }
 
 func TestSetIgnorableNameSpace(t *testing.T) {
@@ -238,21 +268,21 @@ func TestGenXMLNamespace(t *testing.T) {
 func TestBstrUnmarshal(t *testing.T) {
 	bstrs := map[string]string{
 		"*":                           "*",
-		"*_x0000_":                    "*",
-		"*_x0008_":                    "*",
-		"_x0008_*":                    "*",
-		"*_x0008_*":                   "**",
+		"*_x0000_":                    "*\x00",
+		"*_x0008_":                    "*\b",
+		"_x0008_*":                    "\b*",
+		"*_x0008_*":                   "*\b*",
 		"*_x4F60__x597D_":             "*你好",
 		"*_xG000_":                    "*_xG000_",
 		"*_xG05F_x0001_*":             "*_xG05F*",
-		"*_x005F__x0008_*":            "*_x005F_*",
+		"*_x005F__x0008_*":            "*_\b*",
 		"*_x005F_x0001_*":             "*_x0001_*",
-		"*_x005f_x005F__x0008_*":      "*_x005F_*",
+		"*_x005f_x005F__x0008_*":      "*_x005F_\b*",
 		"*_x005F_x005F_xG05F_x0006_*": "*_x005F_xG05F*",
 		"*_x005F_x005F_x005F_x0006_*": "*_x005F_x0006_*",
-		"_x005F__x0008_******":        "_x005F_******",
-		"******_x005F__x0008_":        "******_x005F_",
-		"******_x005F__x0008_******":  "******_x005F_******",
+		"_x005F__x0008_******":        "_\b******",
+		"******_x005F__x0008_":        "******_\b",
+		"******_x005F__x0008_******":  "******_\b******",
 	}
 	for bstr, expected := range bstrs {
 		assert.Equal(t, expected, bstrUnmarshal(bstr))
@@ -270,4 +300,42 @@ func TestBstrMarshal(t *testing.T) {
 	for bstr, expected := range bstrs {
 		assert.Equal(t, expected, bstrMarshal(bstr))
 	}
+}
+
+func TestReadBytes(t *testing.T) {
+	f := &File{tempFiles: sync.Map{}}
+	sheet := "xl/worksheets/sheet1.xml"
+	f.tempFiles.Store(sheet, "/d/")
+	assert.Equal(t, []byte{}, f.readBytes(sheet))
+}
+
+func TestUnzipToTemp(t *testing.T) {
+	os.Setenv("TMPDIR", "test")
+	defer os.Unsetenv("TMPDIR")
+	assert.NoError(t, os.Chmod(os.TempDir(), 0444))
+	f := NewFile()
+	data := []byte("PK\x03\x040000000PK\x01\x0200000" +
+		"0000000000000000000\x00" +
+		"\x00\x00\x00\x00\x00000000000000PK\x01" +
+		"\x020000000000000000000" +
+		"00000\v\x00\x00\x00\x00\x00000000000" +
+		"00000000000000PK\x01\x0200" +
+		"00000000000000000000" +
+		"00\v\x00\x00\x00\x00\x00000000000000" +
+		"00000000000PK\x01\x020000<" +
+		"0\x00\x0000000000000000\v\x00\v" +
+		"\x00\x00\x00\x00\x0000000000\x00\x00\x00\x00000" +
+		"00000000PK\x01\x0200000000" +
+		"0000000000000000\v\x00\x00\x00" +
+		"\x00\x0000PK\x05\x06000000\x05\x000000" +
+		"\v\x00\x00\x00\x00\x00")
+	z, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	assert.NoError(t, err)
+
+	_, err = f.unzipToTemp(z.File[0])
+	require.Error(t, err)
+	assert.NoError(t, os.Chmod(os.TempDir(), 0755))
+
+	_, err = f.unzipToTemp(z.File[0])
+	assert.EqualError(t, err, "EOF")
 }

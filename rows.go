@@ -18,13 +18,20 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/big"
+	"os"
 	"strconv"
 
 	"github.com/mohae/deepcopy"
 )
 
-// GetRows return all the rows in a sheet by given worksheet name (case
-// sensitive). For example:
+// GetRows return all the rows in a sheet by given worksheet name
+// (case sensitive), returned as a two-dimensional array, where the value of
+// the cell is converted to the string type. If the cell format can be
+// applied to the value of the cell, the applied value will be used,
+// otherwise the original value will be used. GetRows fetched the rows with
+// value or formula cells, the tail continuously empty cell will be skipped.
+// For example:
 //
 //    rows, err := f.GetRows("Sheet1")
 //    if err != nil {
@@ -38,7 +45,7 @@ import (
 //        fmt.Println()
 //    }
 //
-func (f *File) GetRows(sheet string) ([][]string, error) {
+func (f *File) GetRows(sheet string, opts ...Options) ([][]string, error) {
 	rows, err := f.Rows(sheet)
 	if err != nil {
 		return nil, err
@@ -46,7 +53,7 @@ func (f *File) GetRows(sheet string) ([][]string, error) {
 	results, cur, max := make([][]string, 0, 64), 0, 0
 	for rows.Next() {
 		cur++
-		row, err := rows.Columns()
+		row, err := rows.Columns(opts...)
 		if err != nil {
 			break
 		}
@@ -55,15 +62,17 @@ func (f *File) GetRows(sheet string) ([][]string, error) {
 			max = cur
 		}
 	}
-	return results[:max], nil
+	return results[:max], rows.Close()
 }
 
 // Rows defines an iterator to a sheet.
 type Rows struct {
 	err                        error
 	curRow, totalRow, stashRow int
+	rawCellValue               bool
 	sheet                      string
 	f                          *File
+	tempFile                   *os.File
 	decoder                    *xml.Decoder
 }
 
@@ -78,12 +87,22 @@ func (rows *Rows) Error() error {
 	return rows.err
 }
 
+// Close closes the open worksheet XML file in the system temporary
+// directory.
+func (rows *Rows) Close() error {
+	if rows.tempFile != nil {
+		return rows.tempFile.Close()
+	}
+	return nil
+}
+
 // Columns return the current row's column values.
-func (rows *Rows) Columns() ([]string, error) {
+func (rows *Rows) Columns(opts ...Options) ([]string, error) {
 	var rowIterator rowXMLIterator
 	if rows.stashRow >= rows.curRow {
 		return rowIterator.columns, rowIterator.err
 	}
+	rows.rawCellValue = parseOptions(opts...).RawCellValue
 	rowIterator.rows = rows
 	rowIterator.d = rows.f.sharedStringsReader()
 	for {
@@ -104,13 +123,13 @@ func (rows *Rows) Columns() ([]string, error) {
 					return rowIterator.columns, rowIterator.err
 				}
 			}
-			rowXMLHandler(&rowIterator, &xmlElement)
+			rowXMLHandler(&rowIterator, &xmlElement, rows.rawCellValue)
 			if rowIterator.err != nil {
 				return rowIterator.columns, rowIterator.err
 			}
 		case xml.EndElement:
 			rowIterator.inElement = xmlElement.Name.Local
-			if rowIterator.row == 0 {
+			if rowIterator.row == 0 && rowIterator.rows.curRow > 1 {
 				rowIterator.row = rowIterator.rows.curRow
 			}
 			if rowIterator.inElement == "row" && rowIterator.row+1 < rowIterator.rows.curRow {
@@ -152,7 +171,7 @@ type rowXMLIterator struct {
 }
 
 // rowXMLHandler parse the row XML element of the worksheet.
-func rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.StartElement) {
+func rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.StartElement, raw bool) {
 	rowIterator.err = nil
 	if rowIterator.inElement == "c" {
 		rowIterator.cellCol++
@@ -164,7 +183,7 @@ func rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.StartElement) {
 			}
 		}
 		blank := rowIterator.cellCol - len(rowIterator.columns)
-		val, _ := colCell.getValueFrom(rowIterator.rows.f, rowIterator.d)
+		val, _ := colCell.getValueFrom(rowIterator.rows.f, rowIterator.d, raw)
 		if val != "" || colCell.F != nil {
 			rowIterator.columns = append(appendSpace(blank, rowIterator.columns), val)
 		}
@@ -189,6 +208,9 @@ func rowXMLHandler(rowIterator *rowXMLIterator, xmlElement *xml.StartElement) {
 //        }
 //        fmt.Println()
 //    }
+//    if err = rows.Close(); err != nil {
+//        fmt.Println(err)
+//    }
 //
 func (f *File) Rows(sheet string) (*Rows, error) {
 	name, ok := f.sheetMap[trimSheetName(sheet)]
@@ -208,8 +230,13 @@ func (f *File) Rows(sheet string) (*Rows, error) {
 		inElement string
 		row       int
 		rows      Rows
+		needClose bool
+		decoder   *xml.Decoder
+		tempFile  *os.File
 	)
-	decoder := f.xmlNewDecoder(bytes.NewReader(f.readXML(name)))
+	if needClose, decoder, tempFile, err = f.sheetDecoder(name); needClose && err == nil {
+		defer tempFile.Close()
+	}
 	for {
 		token, _ := decoder.Token()
 		if token == nil {
@@ -234,13 +261,27 @@ func (f *File) Rows(sheet string) (*Rows, error) {
 			if xmlElement.Name.Local == "sheetData" {
 				rows.f = f
 				rows.sheet = name
-				rows.decoder = f.xmlNewDecoder(bytes.NewReader(f.readXML(name)))
-				return &rows, nil
+				_, rows.decoder, rows.tempFile, err = f.sheetDecoder(name)
+				return &rows, err
 			}
-		default:
 		}
 	}
 	return &rows, nil
+}
+
+// sheetDecoder creates XML decoder by given path in the zip from memory data
+// or system temporary file.
+func (f *File) sheetDecoder(name string) (bool, *xml.Decoder, *os.File, error) {
+	var (
+		content  []byte
+		err      error
+		tempFile *os.File
+	)
+	if content = f.readXML(name); len(content) > 0 {
+		return false, f.xmlNewDecoder(bytes.NewReader(content)), tempFile, err
+	}
+	tempFile, err = f.readTemp(name)
+	return true, f.xmlNewDecoder(tempFile), tempFile, err
 }
 
 // SetRowHeight provides a function to set the height of a single row. For
@@ -356,7 +397,7 @@ func (f *File) sharedStringsReader() *xlsxSST {
 // getValueFrom return a value from a column/row cell, this function is
 // inteded to be used with for range on rows an argument with the spreadsheet
 // opened file.
-func (c *xlsxC) getValueFrom(f *File, d *xlsxSST) (string, error) {
+func (c *xlsxC) getValueFrom(f *File, d *xlsxSST, raw bool) (string, error) {
 	f.Lock()
 	defer f.Unlock()
 	switch c.T {
@@ -365,34 +406,35 @@ func (c *xlsxC) getValueFrom(f *File, d *xlsxSST) (string, error) {
 			xlsxSI := 0
 			xlsxSI, _ = strconv.Atoi(c.V)
 			if len(d.SI) > xlsxSI {
-				return f.formattedValue(c.S, d.SI[xlsxSI].String()), nil
+				return f.formattedValue(c.S, d.SI[xlsxSI].String(), raw), nil
 			}
 		}
-		return f.formattedValue(c.S, c.V), nil
+		return f.formattedValue(c.S, c.V, raw), nil
 	case "str":
-		return f.formattedValue(c.S, c.V), nil
+		return f.formattedValue(c.S, c.V, raw), nil
 	case "inlineStr":
 		if c.IS != nil {
-			return f.formattedValue(c.S, c.IS.String()), nil
+			return f.formattedValue(c.S, c.IS.String(), raw), nil
 		}
-		return f.formattedValue(c.S, c.V), nil
+		return f.formattedValue(c.S, c.V, raw), nil
 	default:
-		isNum, precision := isNumeric(c.V)
-		if isNum && precision > 0 {
-			return c.V, nil
-		}
-		return f.formattedValue(c.S, c.V), nil
+		return f.formattedValue(c.S, c.V, raw), nil
 	}
 }
 
-// roundPrecision round precision for numeric.
-func roundPrecision(value string) (result string, err error) {
-	var num float64
-	if num, err = strconv.ParseFloat(value, 64); err != nil {
-		return
+// roundPrecision provides a function to format floating-point number text
+// with precision, if the given text couldn't be parsed to float, this will
+// return the original string.
+func roundPrecision(text string, prec int) string {
+	decimal := big.Float{}
+	if _, ok := decimal.SetString(text); ok {
+		flt, _ := decimal.Float64()
+		if prec == -1 {
+			return decimal.Text('G', 15)
+		}
+		return strconv.FormatFloat(flt, 'f', -1, 64)
 	}
-	result = fmt.Sprintf("%g", math.Round(num*numericPrecision)/numericPrecision)
-	return
+	return text
 }
 
 // SetRowVisible provides a function to set visible of a single row by given
@@ -611,7 +653,7 @@ func (f *File) duplicateMergeCells(sheet string, ws *xlsxWorksheet, row, row2 in
 		row++
 	}
 	for _, rng := range ws.MergeCells.Cells {
-		coordinates, err := f.areaRefToCoordinates(rng.Ref)
+		coordinates, err := areaRefToCoordinates(rng.Ref)
 		if err != nil {
 			return err
 		}
@@ -621,7 +663,7 @@ func (f *File) duplicateMergeCells(sheet string, ws *xlsxWorksheet, row, row2 in
 	}
 	for i := 0; i < len(ws.MergeCells.Cells); i++ {
 		areaData := ws.MergeCells.Cells[i]
-		coordinates, _ := f.areaRefToCoordinates(areaData.Ref)
+		coordinates, _ := areaRefToCoordinates(areaData.Ref)
 		x1, y1, x2, y2 := coordinates[0], coordinates[1], coordinates[2], coordinates[3]
 		if y1 == y2 && y1 == row {
 			from, _ := CoordinatesToCellName(x1, row2)
@@ -712,6 +754,43 @@ func checkRow(ws *xlsxWorksheet) error {
 				ws.SheetData.Row[rowIdx].C[colNum-1] = *colData
 			}
 		}
+	}
+	return nil
+}
+
+// SetRowStyle provides a function to set the style of rows by given worksheet
+// name, row range, and style ID. Note that this will overwrite the existing
+// styles for the rows, it won't append or merge style with existing styles.
+//
+// For example set style of row 1 on Sheet1:
+//
+//    err = f.SetRowStyle("Sheet1", 1, style)
+//
+// Set style of rows 1 to 10 on Sheet1:
+//
+//    err = f.SetRowStyle("Sheet1", 1, 10, style)
+//
+func (f *File) SetRowStyle(sheet string, start, end, styleID int) error {
+	if end < start {
+		start, end = end, start
+	}
+	if start < 1 {
+		return newInvalidRowNumberError(start)
+	}
+	if end > TotalRows {
+		return ErrMaxRows
+	}
+	if styleID < 0 {
+		return newInvalidStyleID(styleID)
+	}
+	ws, err := f.workSheetReader(sheet)
+	if err != nil {
+		return err
+	}
+	prepareSheetXML(ws, 0, end)
+	for row := start - 1; row < end; row++ {
+		ws.SheetData.Row[row].S = styleID
+		ws.SheetData.Row[row].CustomFormat = true
 	}
 	return nil
 }
